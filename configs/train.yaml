@@ -1,0 +1,213 @@
+# 训练配置
+train_conf:
+  # 是否使用GPU训练
+  use_gpu: true
+  # 训练轮数
+  max_epoch: 100
+  # 是否使用自动混合精度训练
+  enable_amp: true
+  # 是否使用Pytorch2.0的编译器
+  use_compile: true
+  # 标签平滑值
+  label_smoothing: 0.1
+  # 学习率
+  learning_rate: 0.00001
+  # 学习率衰减
+  lr_decay: 0.95
+  # 学习率衰减步长
+  lr_decay_step: 1
+  # 优化器
+  optimizer: adam
+  # 优化器参数
+  optimizer_args:
+    weight_decay: 0.000001
+    beta1: 0.9
+    beta2: 0.999
+  # 学习率调度器
+  scheduler: cosine
+  # 学习率预热步数
+  warmup_epoch: 5
+  # 梯度裁剪
+  grad_clip: 1.0
+  # 是否使用梯度累积
+  gradient_accumulation_steps: 1
+  # 是否使用多卡训练
+  distributed: false
+  # 是否使用同步BN
+  sync_bn: false
+  # 是否使用EMA
+  use_ema: true
+  # EMA衰减率
+  ema_decay: 0.999
+  # 添加Focal Loss参数
+  focal_loss:
+    alpha: 0.25
+    gamma: 2.0
+  # 添加早停
+  early_stopping:
+    patience: 10
+    min_delta: 0.001
+
+# 数据集配置
+dataset_conf:
+  # 训练数据列表
+  train_list: dataset/train_list.txt
+  # 测试数据列表
+  test_list: dataset/test_list.txt
+  # 标签列表
+  label_list_path: dataset/label_list.txt
+  # 数据集配置
+  dataset:
+    # 采样率
+    sample_rate: 16000
+    # 最小音频长度
+    min_duration: 3
+    # 最大音频长度
+    max_duration: 15
+    # 是否使用音量归一化
+    use_dB_normalization: true
+    # 音量归一化大小
+    target_dB: -20
+  # 数据加载器配置
+  dataLoader:
+    # 批次大小
+    batch_size: 64
+    # 是否打乱数据
+    shuffle: true
+    # 数据加载线程数
+    num_workers: 8
+    # 是否丢弃最后一个不完整的batch
+    drop_last: true
+  # 评估配置
+  eval_conf:
+    # 批次大小
+    batch_size: 32
+    # 最大音频长度
+    max_duration: 15
+  # 添加数据增强配置
+  augment_conf:
+    noise_aug_prob: 0.5
+    speed_aug_prob: 0.5
+    pitch_aug_prob: 0.5
+    volume_aug_prob: 0.5
+    # 类别权重
+    class_weights: [3.0, 1.0, 2.0]  # [positive, neutral, negative]
+
+# 预处理配置
+preprocess_conf:
+  # 特征提取方法
+  feature_method: MelSpectrogram
+  # 特征提取参数
+  method_args:
+    sample_rate: 16000
+    n_fft: 512
+    hop_length: 160
+    win_length: 512
+    window: hann
+    n_mels: 80
+    fmin: 0
+    fmax: 8000
+    frame_length: 25
+    frame_shift: 10
+
+# 数据增强配置
+augment_conf:
+  # 速度扰动
+  speed_perturb:
+    # 是否使用速度扰动
+    use_speed_perturb: true
+    # 速度扰动范围
+    speeds: [0.9, 1.0, 1.1]
+  # 音量扰动
+  volume_perturb:
+    # 是否使用音量扰动
+    use_volume_perturb: true
+    # 音量扰动范围
+    min_gain_dBFS: -10
+    max_gain_dBFS: 10
+  # 噪声扰动
+  noise_perturb:
+    # 是否使用噪声扰动
+    use_noise_perturb: true
+    # 噪声文件列表
+    noise_list: 'dataset/noise_list.txt'
+    # 噪声比例
+    noise_ratio: 0.5
+    # 信噪比范围
+    min_snr_db: 5
+    max_snr_db: 20
+  # 混响扰动
+  reverb_perturb:
+    # 是否使用混响扰动
+    use_reverb_perturb: true
+    # 混响文件列表
+    reverb_list: 'dataset/reverb_list.txt'
+    # 混响比例
+    reverb_ratio: 0.5
+  # 频谱增强
+  spec_augment:
+    # 是否使用频谱增强
+    use_spec_augment: true
+    # 频率掩码数量
+    freq_mask_num: 2
+    # 频率掩码宽度
+    freq_mask_width: 30
+    # 时间掩码数量
+    time_mask_num: 2
+    # 时间掩码宽度
+    time_mask_width: 40
+
+# 模型配置
+model_conf:
+  # 使用的模型
+  use_model: 'EcapaTdnn'
+  # 模型参数
+  model_args:
+    # 分类数量
+    num_class: 3
+    # 隐藏层大小
+    hidden_size: 1024
+    # 输出通道数
+    output_size: 512
+    # 是否使用SE模块
+    use_se: true
+    # SE模块的reduction比例
+    se_reduction: 8
+    # 是否使用注意力机制
+    use_attention: true
+    # 注意力头数
+    num_heads: 8
+    # 是否使用残差连接
+    use_residual: true
+    # 是否使用层归一化
+    use_layer_norm: true
+    # 是否使用dropout
+    use_dropout: true
+    # dropout比例
+    dropout_rate: 0.3
+    # 是否使用BatchNorm
+    use_batch_norm: true
+    # 是否使用GroupNorm
+    use_group_norm: true
+    # GroupNorm的组数
+    num_groups: 8
+    # 嵌入维度
+    embd_dim: 192
+    # 池化类型
+    pooling_type: "ASP"
+    # 通道数
+    channels: [512, 512, 512, 512, 1536]
+    # 卷积核大小
+    kernel_sizes: [5, 3, 3, 3, 1]
+    # 膨胀率
+    dilations: [1, 2, 3, 4, 1]
+    # 注意力通道数
+    attention_channels: 128
+    # Res2Net缩放因子
+    res2net_scale: 8
+    # SE模块通道数
+    se_channels: 128
+    # 是否使用全局上下文
+    global_context: true
+    # 分组卷积的组数
+    groups: [1, 1, 1, 1, 1] 

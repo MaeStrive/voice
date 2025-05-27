@@ -9,13 +9,21 @@ from .res2net import Res2Net
 from .resnet_se import ResNetSE
 from .tdnn import TDNN
 
-__all__ = ['build_model']
+__all__ = ['EcapaTdnn']
 
 
 def build_model(input_size, configs):
-    use_model = configs.model_conf.get('model', 'CAMPPlus')
-    model_args = configs.model_conf.get('model_args', {})
-    mod = importlib.import_module(__name__)
-    model = getattr(mod, use_model)(input_size=input_size, **model_args)
-    logger.info(f'成功创建模型：{use_model}，参数为：{model_args}')
+    """构建模型
+
+    :param input_size: 输入特征大小
+    :param configs: 模型配置
+    :return: 模型
+    """
+    model_name = configs.model_conf.use_model
+    model_args = configs.model_conf.model_args.copy()
+    # 移除input_size参数，避免重复传递
+    if 'input_size' in model_args:
+        del model_args['input_size']
+    model = eval(model_name)(input_size=input_size, **model_args)
+    logger.info(f'成功创建模型：{model_name}，参数为：{model_args}')
     return model

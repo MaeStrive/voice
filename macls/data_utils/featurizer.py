@@ -114,7 +114,21 @@ class AudioFeaturizer(nn.Module):
 class KaldiFbank(nn.Module):
     def __init__(self, **kwargs):
         super(KaldiFbank, self).__init__()
-        self.kwargs = kwargs
+        # 参数转换
+        self.kwargs = {}
+        # 帧长和帧移需要转换为毫秒
+        if 'frame_length' in kwargs:
+            self.kwargs['frame_length'] = kwargs.pop('frame_length')
+        if 'frame_shift' in kwargs:
+            self.kwargs['frame_shift'] = kwargs.pop('frame_shift')
+        # 预加重系数
+        if 'preemph_coeff' in kwargs:
+            self.kwargs['preemph'] = kwargs.pop('preemph_coeff')
+        elif 'preemphasis' in kwargs:
+            self.kwargs['preemph'] = kwargs.pop('preemphasis')
+        # 其他参数直接复制
+        for key, value in kwargs.items():
+            self.kwargs[key] = value
 
     def forward(self, waveforms):
         """

@@ -1,26 +1,37 @@
+import os
+import sys
+import yaml
+# 添加项目根目录到Python路径
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
 import argparse
 import functools
 import time
 
 from macls.trainer import MAClsTrainer
-from macls.utils.utils import add_arguments, print_arguments
 
-parser = argparse.ArgumentParser(description=__doc__)
-add_arg = functools.partial(add_arguments, argparser=parser)
-add_arg('configs',          str,   'configs/cam++.yml',         "配置文件")
-add_arg("use_gpu",          bool,  True,                        "是否使用GPU评估模型")
-add_arg('save_matrix_path', str,   'output/images/',            "保存混合矩阵的路径")
-add_arg('resume_model',     str,   'models/CAMPPlus_Fbank/best_model/',  "模型的路径")
-add_arg('overwrites',       str,    None,    '覆盖配置文件中的参数，比如"train_conf.max_epoch=100"，多个用逗号隔开')
-args = parser.parse_args()
-print_arguments(args=args)
+def main():
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='评估模型')
+    parser.add_argument('--configs', type=str, default='configs/train.yaml', help='配置文件路径')
+    parser.add_argument('--resume_model', type=str, default='checkpoints/best_model.pth', help='模型路径')
+    args = parser.parse_args()
 
-# 获取训练器
-trainer = MAClsTrainer(configs=args.configs, use_gpu=args.use_gpu, overwrites=args.overwrites)
+    # 添加项目根目录到Python路径
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    sys.path.append(current_dir)
 
-# 开始评估
-start = time.time()
-loss, accuracy = trainer.evaluate(resume_model=args.resume_model,
-                                  save_matrix_path=args.save_matrix_path)
-end = time.time()
-print('评估消耗时间：{}s，loss：{:.5f}，accuracy：{:.5f}'.format(int(end - start), loss, accuracy))
+    # 读取配置文件
+    with open(args.configs, 'r', encoding='utf-8') as f:
+        configs = yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    # 创建训练器
+    trainer = MAClsTrainer(configs=configs, use_gpu=True)
+
+    # 评估模型
+    loss, accuracy = trainer.evaluate(resume_model=args.resume_model)
+    print(f'评估结果 - 损失: {loss:.5f}, 准确率: {accuracy:.5f}')
+
+if __name__ == '__main__':
+    main()

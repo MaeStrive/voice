@@ -187,18 +187,42 @@ class MAClsTrainer(object):
                         f.write(f'{save_path}\t{label}\n')
             logger.info(f'{data_list}列表中的数据已提取特征完成，新列表为：{save_data_list}')
 
-    def __setup_model(self, input_size, is_train=False):
-        """ 获取模型
-
-        :param input_size: 模型输入特征大小
-        :param is_train: 是否获取训练模型
-        """
-        # 自动获取列表数量
-        if self.configs.model_conf.model_args.get('num_class', None) is None:
-            self.configs.model_conf.model_args.num_class = len(self.class_labels)
-        # 获取模型
-        self.model = build_model(input_size=input_size, configs=self.configs)
-        self.model.to(self.device)
+    def __setup_model(self, input_size, is_train=True):
+        """设置模型"""
+        # 获取模型名称
+        model_name = self.configs['model_conf']['use_model']
+        
+        # 构建模型
+        if model_name == 'EcapaTdnn':
+            from models.ecapatdnn import EcapaTdnn
+            self.model = EcapaTdnn(
+                input_size=input_size,
+                hidden_size=self.configs['model_conf']['model_args']['hidden_size'],
+                output_size=self.configs['model_conf']['model_args']['output_size'],
+                num_class=self.configs['model_conf']['model_args']['num_class'],
+                use_se=self.configs['model_conf']['model_args']['use_se'],
+                se_reduction=self.configs['model_conf']['model_args']['se_reduction'],
+                use_attention=self.configs['model_conf']['model_args']['use_attention'],
+                num_heads=self.configs['model_conf']['model_args']['num_heads'],
+                use_residual=self.configs['model_conf']['model_args']['use_residual'],
+                use_layer_norm=self.configs['model_conf']['model_args']['use_layer_norm'],
+                use_dropout=self.configs['model_conf']['model_args']['use_dropout'],
+                dropout_rate=self.configs['model_conf']['model_args']['dropout_rate'],
+                use_batch_norm=self.configs['model_conf']['model_args']['use_batch_norm'],
+                use_group_norm=self.configs['model_conf']['model_args']['use_group_norm'],
+                num_groups=self.configs['model_conf']['model_args']['num_groups']
+            )
+        else:
+            raise ValueError(f'不支持的模型: {model_name}')
+        
+        # 将模型移动到指定设备
+        self.model = self.model.to(self.device)
+        
+        # 如果是训练模式，设置为训练状态
+        if is_train:
+            self.model.train()
+        else:
+            self.model.eval()
         if self.log_level == "DEBUG" or self.log_level == "INFO":
             # 打印模型信息，98是长度，这个取决于输入的音频长度
             summary(self.model, input_size=(1, 98, input_size))
@@ -375,59 +399,76 @@ class MAClsTrainer(object):
                                 accuracy=self.eval_acc)
 
     def evaluate(self, resume_model=None, save_matrix_path=None):
-        """
-        评估模型
-        :param resume_model: 所使用的模型
+        """评估模型
+
+        :param resume_model: 恢复训练的模型文件夹路径
         :param save_matrix_path: 保存混合矩阵的路径
         :return: 评估结果
         """
-        if self.test_loader is None:
-            self.__setup_dataloader()
-        if self.model is None:
-            self.__setup_model(input_size=self.audio_featurizer.feature_dim)
-        if resume_model is not None:
+        self.__setup_dataloader(is_train=False)
+        self.__setup_model(input_size=self.audio_featurizer.feature_dim, is_train=False)
+        # 加载模型
+        if resume_model:
             if os.path.isdir(resume_model):
                 resume_model = os.path.join(resume_model, 'model.pth')
-            assert os.path.exists(resume_model), f"{resume_model} 模型不存在！"
-            model_state_dict = torch.load(resume_model, weights_only=False)
-            self.model.load_state_dict(model_state_dict)
-            logger.info(f'成功加载模型：{resume_model}')
+            assert os.path.exists(resume_model), f"{resume_model}模型不存在！"
+            checkpoint = torch.load(resume_model)
+            # 检查是否是完整的checkpoint
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                model_state_dict = checkpoint['model_state_dict']
+            else:
+                model_state_dict = checkpoint
+            # 移除module前缀
+            new_state_dict = {}
+            for k, v in model_state_dict.items():
+                if k.startswith('module.'):
+                    k = k[7:]
+                new_state_dict[k] = v
+            # 加载模型权重
+            try:
+                self.model.load_state_dict(new_state_dict, strict=False)
+                logger.info(f'成功加载模型：{resume_model}')
+            except Exception as e:
+                logger.warning(f'加载模型时出现警告：{str(e)}')
+                logger.info('尝试使用非严格模式加载模型...')
+                self.model.load_state_dict(new_state_dict, strict=False)
         self.model.eval()
-        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
-            eval_model = self.model.module
-        else:
-            eval_model = self.model
-
-        accuracies, losses, preds, labels = [], [], [], []
+        # 开始评估
+        loss_sum = []
+        accuracies = []
+        feature_list = []
+        y_true = []
+        y_pred = []
         with torch.no_grad():
-            for batch_id, (features, label, input_lens) in enumerate(tqdm(self.test_loader, desc='执行评估')):
-                if self.stop_eval: break
+            for batch_id, (features, label, input_len) in enumerate(tqdm(self.test_loader)):
                 features = features.to(self.device)
                 label = label.to(self.device).long()
-                output = eval_model(features)
+                # 执行模型计算
+                output = self.model(features)
+                # 计算损失值
                 los = self.loss(output, label)
                 # 计算准确率
-                acc = accuracy(output, label)
-                accuracies.append(acc)
-                # 模型预测标签
-                label = label.data.cpu().numpy()
+                output = torch.nn.functional.softmax(output, dim=-1)
                 output = output.data.cpu().numpy()
-                pred = np.argmax(output, axis=1)
-                preds.extend(pred.tolist())
-                # 真实标签
-                labels.extend(label.tolist())
-                losses.append(los.data.cpu().numpy())
-        loss = float(sum(losses) / len(losses)) if len(losses) > 0 else -1
-        acc = float(sum(accuracies) / len(accuracies)) if len(accuracies) > 0 else -1
+                output = np.argmax(output, axis=1)
+                label = label.data.cpu().numpy()
+                acc = np.mean((output == label).astype(int))
+                accuracies.append(acc)
+                loss_sum.append(los)
+                # 保存预测结果
+                y_true.extend(label)
+                y_pred.extend(output)
+        # 计算平均损失
+        loss = float(sum(loss_sum) / len(loss_sum))
+        # 计算准确率
+        acc = float(sum(accuracies) / len(accuracies))
         # 保存混合矩阵
-        if save_matrix_path is not None:
-            try:
-                cm = confusion_matrix(labels, preds)
-                plot_confusion_matrix(cm=cm, save_path=os.path.join(save_matrix_path, f'{int(time.time())}.png'),
-                                      class_labels=self.class_labels)
-            except Exception as e:
-                logger.error(f'保存混淆矩阵失败：{e}')
-        self.model.train()
+        if save_matrix_path:
+            os.makedirs(save_matrix_path, exist_ok=True)
+            save_path = os.path.join(save_matrix_path, f'{int(time.time())}.png')
+            cm = confusion_matrix(y_true=y_true, y_pred=y_pred)
+            plot_confusion_matrix(cm=cm, save_path=save_path, class_labels=self.class_labels)
+            logger.info(f'混合矩阵已保存：{save_path}')
         return loss, acc
 
     def export(self, save_model_path='models/', resume_model='models/EcapaTdnn_Fbank/best_model/'):
