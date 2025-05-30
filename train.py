@@ -15,6 +15,12 @@ import numpy as np
 from tqdm import tqdm
 from tools.extract_all_features import process_audio_files
 import yaml
+import torch.cuda.amp as amp
+from torch.utils.tensorboard import SummaryWriter
+import time
+import psutil
+import GPUtil
+from datetime import datetime
 
 def load_config(config_path):
     """加载配置文件"""
@@ -22,13 +28,49 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     return config
 
+def get_gpu_memory_usage():
+    """获取GPU显存使用情况"""
+    try:
+        gpu = GPUtil.getGPUs()[0]  # 获取第一个GPU的信息
+        return {
+            'used': gpu.memoryUsed,  # 已使用显存（MB）
+            'total': gpu.memoryTotal,  # 总显存（MB）
+            'utilization': gpu.memoryUtil * 100  # 显存使用率（%）
+        }
+    except:
+        return None
+
+def log_memory_usage(logger, epoch, step, phase='train'):
+    """记录内存使用情况"""
+    # 获取CPU内存使用情况
+    process = psutil.Process()
+    cpu_memory = process.memory_info().rss / 1024 / 1024  # 转换为MB
+    
+    # 获取系统总内存
+    system_memory = psutil.virtual_memory()
+    total_memory = system_memory.total / 1024 / 1024  # 转换为MB
+    memory_percent = system_memory.percent  # 系统内存使用百分比
+    process_percent = (cpu_memory / total_memory) * 100  # 当前进程内存使用百分比
+    
+    # 获取GPU显存使用情况
+    gpu_memory = get_gpu_memory_usage()
+    
+    # 使用更简洁的格式记录日志
+    logger.info(f"[{phase}] Epoch {epoch} Step {step} | CPU: {cpu_memory:.1f}MB ({process_percent:.1f}% of {total_memory:.0f}MB) | 系统内存使用率: {memory_percent}%")
+    if gpu_memory:
+        logger.info(f"[{phase}] GPU: {gpu_memory['used']:.1f}MB / {gpu_memory['total']:.1f}MB ({gpu_memory['utilization']:.1f}%)")
+
 def train(model, train_loader, criterion, optimizer, device):
     model.train()
     total_loss = 0
     correct = 0
     total = 0
     
-    for batch in tqdm(train_loader, desc="训练中"):
+    for step, batch in enumerate(tqdm(train_loader, desc="训练中")):
+        # 每100步记录一次内存使用情况
+        if step % 100 == 0:
+            log_memory_usage(logger, epoch=0, step=step, phase='train')
+            
         audio_features = batch['audio_features'].to(device)
         extra_features = batch['extra_features'].to(device) if batch['extra_features'] is not None else None
         labels = batch['label'].to(device)
@@ -47,6 +89,9 @@ def train(model, train_loader, criterion, optimizer, device):
     
     accuracy = 100. * correct / total
     avg_loss = total_loss / len(train_loader)
+    
+    # 使用更醒目的格式打印训练结果
+    logger.info(f"训练结果 - 损失: {avg_loss:.4f} | 准确率: {accuracy:.2f}%")
     return avg_loss, accuracy
 
 def validate(model, val_loader, criterion, device):
@@ -56,7 +101,11 @@ def validate(model, val_loader, criterion, device):
     total = 0
     
     with torch.no_grad():
-        for batch in tqdm(val_loader, desc="验证中"):
+        for step, batch in enumerate(tqdm(val_loader, desc="验证中")):
+            # 每50步记录一次内存使用情况
+            if step % 50 == 0:
+                log_memory_usage(logger, epoch=0, step=step, phase='val')
+                
             audio_features = batch['audio_features'].to(device)
             extra_features = batch['extra_features'].to(device) if batch['extra_features'] is not None else None
             labels = batch['label'].to(device)
@@ -71,6 +120,9 @@ def validate(model, val_loader, criterion, device):
     
     accuracy = 100. * correct / total
     avg_loss = total_loss / len(val_loader)
+    
+    # 使用更醒目的格式打印验证结果
+    logger.info(f"验证结果 - 损失: {avg_loss:.4f} | 准确率: {accuracy:.2f}%")
     return avg_loss, accuracy
 
 def get_num_classes(label_list_path):
@@ -99,13 +151,50 @@ def check_and_extract_features():
     else:
         logger.info("特征文件已存在，跳过特征提取步骤。")
 
+# 配置日志
+def setup_logger():
+    """配置日志记录器"""
+    # 创建logs目录
+    os.makedirs('logs', exist_ok=True)
+    
+    # 生成日志文件名，包含时间戳
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_file = f'logs/train_{current_time}.log'
+    
+    # 移除默认的处理器
+    logger.remove()
+    
+    # 添加控制台输出，使用更简洁的格式
+    logger.add(sys.stdout, 
+              format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>",
+              level="INFO")
+    
+    # 添加文件输出，使用更详细的格式
+    logger.add(log_file,
+              format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+              level="INFO",
+              rotation="500 MB",
+              retention="10 days",
+              encoding="utf-8")
+    
+    return log_file
+
 def main():
+    # 设置日志
+    log_file = setup_logger()
+    logger.info(f"日志文件保存在: {log_file}")
+    
     # 加载配置
     config = load_config('configs/train.yaml')
     dataset_conf = config['dataset_conf']
     train_conf = config['train_conf']
     preprocess_conf = config['preprocess_conf']
     model_conf = config['model_conf']
+    
+    # 设置TensorBoard
+    current_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    writer = SummaryWriter(f'runs/train_{current_time}')
+    logger.info(f"TensorBoard日志保存在: runs/train_{current_time}")
     
     # 设置默认的log_interval
     if 'log_interval' not in train_conf:
@@ -183,10 +272,21 @@ def main():
         # 训练
         train_loss, train_acc = train(model, train_loader, criterion, optimizer, device)
         logger.info(f"训练损失: {train_loss:.4f}, 训练准确率: {train_acc:.2f}%")
+        writer.add_scalar('Loss/train', train_loss, epoch)
+        writer.add_scalar('Accuracy/train', train_acc, epoch)
         
         # 验证
         val_loss, val_acc = validate(model, val_loader, criterion, device)
         logger.info(f"验证损失: {val_loss:.4f}, 验证准确率: {val_acc:.2f}%")
+        writer.add_scalar('Loss/val', val_loss, epoch)
+        writer.add_scalar('Accuracy/val', val_acc, epoch)
+        
+        # 记录GPU显存使用情况
+        gpu_memory = get_gpu_memory_usage()
+        if gpu_memory:
+            writer.add_scalar('GPU/used_memory', gpu_memory['used'], epoch)
+            writer.add_scalar('GPU/memory_utilization', gpu_memory['utilization'], epoch)
+            logger.info(f"GPU显存: {gpu_memory['used']:.1f}MB / {gpu_memory['total']:.1f}MB ({gpu_memory['utilization']:.1f}%)")
         
         # 保存最佳模型
         if val_acc > best_val_acc:
@@ -207,6 +307,10 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_acc': val_acc,
             }, f'checkpoints/checkpoint_epoch_{epoch+1}.pth')
+
+    # 关闭TensorBoard写入器
+    writer.close()
+    logger.info("训练完成！")
 
 if __name__ == '__main__':
     main()
